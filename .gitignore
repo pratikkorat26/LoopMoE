@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Datasets & Model Checkpoints
+data/
+checkpoints/
+checkpoints_*/
+*.bin
+*.safetensors
+*.npz
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
