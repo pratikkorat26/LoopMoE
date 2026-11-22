@@ -9,8 +9,8 @@ from typing import List, Optional
 import mlx.core as mx
 import tiktoken
 
-from config import ModelConfig
-from model import LoopedMoETransformer
+from loopmoe.config import ModelConfig
+from loopmoe.model import LoopedMoETransformer
 
 
 def sample_next_token(

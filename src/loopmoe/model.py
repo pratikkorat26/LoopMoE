@@ -21,9 +21,9 @@ from typing import Dict, List, Optional, Tuple
 import mlx.core as mx
 import mlx.nn as nn
 
-from config import ModelConfig
-from kernels import fused_adaln_rmsnorm, fused_swiglu
-from moe import MoELayer
+from loopmoe.config import ModelConfig
+from loopmoe.kernels import fused_adaln_rmsnorm, fused_swiglu
+from loopmoe.moe import MoELayer
 
 
 # ---------------------------------------------------------------------------

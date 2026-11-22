@@ -20,16 +20,27 @@
   - **Exact Chunked Checkpointed Cross-Entropy** (reduces 16k LM-head memory from ~9.9 GB → ~0.4 GB)
 - **Modern Optimization:** Hybrid **Muon** (2D hidden projections) + **AdamW** (embeddings, 3D routed experts, routers, norms) via `MultiOptimizer`, `bfloat16` compute / `float32` master weights, cosine decay with linear warmup, and zero-bottleneck `uint16` `np.memmap` dataloaders for **TinyStories** and **FineWeb-Edu**.
 
-## Repository Structure
+## Project Layout
 
-| File | Description |
-|---|---|
-| `config.py` | `ModelConfig`, `TrainConfig`, and exact analytical parameter accounting |
-| `kernels.py` | Custom Metal fused kernels (`SwiGLU`, `AdaLN+RMSNorm`, `Router Top-K`) + forward/backward parity suite |
-| `moe.py` | `IterationAwareRouter`, `SharedExpert`, and `mx.gather_mm` sparse `MoELayer` |
-| `model.py` | `GQAAttention` (QK-Norm, YaRN RoPE, Sinks, Hybrid SWA, Q-Chunked SDPA), `RecurrentCore`, `LoopedMoETransformer` |
-| `train.py` | Memmap dataset preparation (`tinystories` / `fineweb`), hybrid `Muon`+`AdamW` training loop, router telemetry |
-| `generate.py` | KV-cached autoregressive text generation with test-time loop scaling (`--loops 2 4 6`) |
+```text
+LoopMoE/
+├── pyproject.toml              # Package metadata & CLI entrypoints (loopmoe-train, loopmoe-generate, loopmoe-bench)
+├── LICENSE                     # MIT License
+├── src/loopmoe/
+│   ├── __init__.py             # Public API exports
+│   ├── config.py               # ModelConfig, TrainConfig & exact analytical parameter breakdown
+│   ├── kernels.py              # Custom Metal fused kernels (SwiGLU, AdaLN+RMSNorm, Router Top-K) + VJPs
+│   ├── moe.py                  # IterationAwareRouter, SharedExpert, gather_mm sparse MoELayer
+│   ├── model.py                # YaRN RoPE, Q-Chunked SDPA, GQAAttention, RecurrentCore, LoopedMoETransformer
+│   ├── data.py                 # Zero-bottleneck uint16 memmap loaders (TinyStories & FineWeb-Edu)
+│   ├── train.py                # Hybrid Muon + AdamW training loop & telemetry
+│   └── generate.py             # KV-cached autoregressive generation with test-time loop scaling
+├── scripts/
+│   └── benchmark_kernels.py    # Standalone Metal kernel parity & M4 micro-benchmark runner
+└── tests/
+    ├── test_kernels.py         # Forward & backward parity tests for custom Metal kernels
+    └── test_model.py           # End-to-end model, Q-chunked SDPA, chunked CE & KV-cache parity tests
+```
 
 ## Benchmarks (Apple M4 — 8-core GPU, 16 GB Unified Memory)
 
@@ -42,15 +53,22 @@
 ## Quickstart
 
 ```bash
-# 1. Verify custom Metal kernel forward & backward parity + micro-benchmarks
-python kernels.py
+# Install editable package (registers loopmoe-train, loopmoe-generate, loopmoe-bench)
+pip install -e .
 
-# 2. Train on TinyStories (fast sanity check)
-python train.py --dataset tinystories --steps 200 --batch_size 8 --grad_accum 2 --seq_len 512 --loops 4
+# 1. Run full numerical parity test suite (kernels, Q-chunked SDPA, KV cache, full model)
+PYTHONPATH=src python tests/test_kernels.py
+PYTHONPATH=src python tests/test_model.py
 
-# 3. Train on FineWeb-Edu (crawled web pages) with long context
-python train.py --dataset fineweb --train_docs 25000 --seq_len 2048 --batch_size 2 --grad_accum 4 --steps 2000
+# 2. Run Metal kernel micro-benchmarks
+PYTHONPATH=src python scripts/benchmark_kernels.py
 
-# 4. Generate text comparing multiple test-time loop counts
-python generate.py --ckpt_dir checkpoints --loops 2 4 6 --prompt "Once upon a time, a little dog named Max"
+# 3. Train on TinyStories (fast sanity check)
+PYTHONPATH=src python -m loopmoe.train --dataset tinystories --steps 200 --batch_size 8 --grad_accum 2 --seq_len 512 --loops 4
+
+# 4. Train on FineWeb-Edu (crawled web pages) with long context
+PYTHONPATH=src python -m loopmoe.train --dataset fineweb --train_docs 25000 --seq_len 2048 --batch_size 2 --grad_accum 4 --steps 2000
+
+# 5. Generate text comparing multiple test-time loop counts
+PYTHONPATH=src python -m loopmoe.generate --ckpt_dir checkpoints --loops 2 4 6 --prompt "Once upon a time, a little dog named Max"
 ```

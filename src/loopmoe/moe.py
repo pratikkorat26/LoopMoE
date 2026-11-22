@@ -10,8 +10,8 @@ from typing import Tuple
 import mlx.core as mx
 import mlx.nn as nn
 
-from config import ModelConfig
-from kernels import fused_router_topk_sigmoid, fused_swiglu
+from loopmoe.config import ModelConfig
+from loopmoe.kernels import fused_router_topk_sigmoid, fused_swiglu
 
 
 class SharedExpert(nn.Module):
@@ -183,40 +183,32 @@ class MoELayer(nn.Module):
 
         top_k_idx, top_k_weights, expert_counts = self.router(x, step_emb)
 
-        # Sort token-expert assignments by expert ID so `gather_mm` hits sorted fast path
-        x_flat = x.reshape(N, D)
-        flat_experts = top_k_idx.reshape(-1)  # (N*K,)
-        order = mx.argsort(flat_experts)
-        sorted_experts = flat_experts[order]
-        sorted_tokens = order // K
-
-        # Gather tokens -> (N*K, 1, D)
-        x_sorted = x_flat[sorted_tokens][:, None, :]
-
-        # Fused Gate + Up projection via hardware-accelerated gather_mm
+        # Direct hardware-accelerated gather_mm:
+        #   x_in: (N, 1, 1, D), w_gate_up: (E, D, 2*H), rhs_indices: (N, K)
+        #   -> h: (N, K, 1, 2*H)  (zero sorting/unsorting overhead, exact at any N >= 1)
+        x_flat = x.reshape(N, 1, 1, D)
         h = mx.gather_mm(
-            x_sorted,
+            x_flat,
             self.w_gate_up.astype(orig_dtype),
-            rhs_indices=sorted_experts,
-            sorted_indices=True,
-        )  # (N*K, 1, 2*H)
+            rhs_indices=top_k_idx,
+            sorted_indices=False,
+        )  # (N, K, 1, 2*H)
+
         if self.use_fused_kernels:
             h = fused_swiglu(h)
         else:
             gate, up = mx.split(h, 2, axis=-1)
             h = nn.silu(gate) * up
 
-        # Down projection via gather_mm
-        y_sorted = mx.gather_mm(
+        # Down projection via gather_mm -> (N, K, 1, D) -> (N, K, D)
+        y_routed = mx.gather_mm(
             h,
             self.w_down.astype(orig_dtype),
-            rhs_indices=sorted_experts,
-            sorted_indices=True,
-        ).squeeze(1)  # (N*K, D)
+            rhs_indices=top_k_idx,
+            sorted_indices=False,
+        ).squeeze(2)
 
-        # Unsort back to (N, K, D) and combine with unbiased router weights
-        inv_order = mx.argsort(order)
-        y_routed = y_sorted[inv_order].reshape(N, K, D)
+        # Combine with unbiased router weights -> (B, T, D)
         y_routed = mx.sum(
             y_routed * top_k_weights.astype(orig_dtype)[..., None], axis=1
         ).reshape(B, T, D)
